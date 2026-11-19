@@ -6,6 +6,10 @@
 export const ACTION_ENTER = 1;
 export const ACTION_PAUSE = 2;
 export const ACTION_CONFIRM = 4;
+export const ACTION_PUNCH = 8;
+export const ACTION_RELOAD = 16;
+export const ACTION_MUTE = 32;
+export const ACTION_SHOOT = 64;
 
 const FORWARD = new Set(['KeyW', 'ArrowUp']);
 const BACK = new Set(['KeyS', 'ArrowDown']);
@@ -15,6 +19,9 @@ const RUN = new Set(['ShiftLeft', 'ShiftRight']);
 const ENTER = new Set(['KeyE']);
 const PAUSE = new Set(['Escape', 'KeyP']);
 const CONFIRM = new Set(['Enter', 'Space']);
+const PUNCH = new Set(['KeyF']);
+const RELOAD = new Set(['KeyR']);
+const MUTE = new Set(['KeyM']);
 
 export function createInput(canvas) {
   const keys = new Set();
@@ -29,6 +36,9 @@ export function createInput(canvas) {
     if (ENTER.has(event.code)) actions |= ACTION_ENTER;
     else if (PAUSE.has(event.code)) actions |= ACTION_PAUSE;
     else if (CONFIRM.has(event.code)) actions |= ACTION_CONFIRM;
+    else if (PUNCH.has(event.code)) actions |= ACTION_PUNCH;
+    else if (RELOAD.has(event.code)) actions |= ACTION_RELOAD;
+    else if (MUTE.has(event.code)) actions |= ACTION_MUTE;
     if (FORWARD.has(event.code) || BACK.has(event.code) || LEFT.has(event.code)
       || RIGHT.has(event.code) || event.code === 'Space') event.preventDefault();
   });
@@ -40,8 +50,14 @@ export function createInput(canvas) {
     keys.clear();
   });
 
+  // A click (press and release almost in place) fires the pistol; a drag
+  // orbits the camera. Both start on pointerdown — the release decides.
+  let downX = 0;
+  let downY = 0;
   canvas.addEventListener('pointerdown', (event) => {
     dragging = true;
+    downX = event.clientX;
+    downY = event.clientY;
     canvas.setPointerCapture(event.pointerId);
   });
   canvas.addEventListener('pointermove', (event) => {
@@ -49,8 +65,11 @@ export function createInput(canvas) {
     dragX += event.movementX;
     dragY += event.movementY;
   });
-  canvas.addEventListener('pointerup', () => {
+  canvas.addEventListener('pointerup', (event) => {
     dragging = false;
+    if (Math.hypot(event.clientX - downX, event.clientY - downY) < 6) {
+      actions |= ACTION_SHOOT;
+    }
   });
 
   function axis(neg, pos) {

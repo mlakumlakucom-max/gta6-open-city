@@ -61,16 +61,49 @@ function canvasTexture(size, draw) {
 }
 
 /** A warm window grid, drawn once and shared by every building face. */
-function windowTexture() {
+function windowTexture(lit) {
   return canvasTexture(128, (g, size) => {
     g.fillStyle = '#f2e3c6';
     g.fillRect(0, 0, size, size);
-    g.fillStyle = '#2e3a4a';
     for (let y = 8; y < size - 8; y += 16) {
       for (let x = 8; x < size - 8; x += 16) {
+        // A lit window glows warm yellow, like a room with the lights on
+        // at dusk; the rest stay dark glass.
+        g.fillStyle = lit && ((x * 7 + y * 13) % 11 < 4) ? '#ffd97a' : '#2e3a4a';
         g.fillRect(x, y, 8, 10);
       }
     }
+  });
+}
+
+/** A vertical sky gradient with a low warm band, for the sky dome. */
+function skyTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 256;
+  const g = canvas.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, '#3f7fc9');
+  grad.addColorStop(0.45, '#7fb8e8');
+  grad.addColorStop(0.72, '#cfe8f2');
+  grad.addColorStop(0.85, '#ffd9a0');
+  grad.addColorStop(1, '#ffb37a');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 4, 256);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** A soft radial glow, for the sun disc and its glare. */
+function glowTexture() {
+  return canvasTexture(128, (g, size) => {
+    const grad = g.createRadialGradient(size / 2, size / 2, 2, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, 'rgba(255,244,200,1)');
+    grad.addColorStop(0.35, 'rgba(255,220,140,0.55)');
+    grad.addColorStop(1, 'rgba(255,200,110,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
   });
 }
 
@@ -93,9 +126,10 @@ function makePalm(random, trunkMat, leafMat) {
 }
 
 export function createWorld(scene, random) {
-  const buildings = []; // {minX, maxX, minZ, maxZ} — collision boxes.
+  const buildings = []; // {minX, maxX, minZ, maxZ, height} — collision boxes.
   const colliders = [];
-  const windows = windowTexture();
+  const windows = windowTexture(false);
+  const windowsLit = windowTexture(true);
 
   // --- ground, roads, sidewalks, beach, sea -------------------------------
   const ground = new THREE.Mesh(
@@ -173,7 +207,9 @@ export function createWorld(scene, random) {
         const x = bx + ox;
         const z = bz + oz;
         const colour = random.pick(BUILDING_COLOURS);
-        const mat = new THREE.MeshLambertMaterial({ color: colour, map: windows });
+        const mat = new THREE.MeshLambertMaterial({
+          color: colour, map: random.next() < 0.4 ? windowsLit : windows,
+        });
         const building = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
         building.position.set(x, h / 2, z);
         building.castShadow = true;
@@ -196,7 +232,9 @@ export function createWorld(scene, random) {
           tank.castShadow = true;
           scene.add(tank);
         }
-        const box = { minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 };
+        const box = {
+          minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, height: h,
+        };
         buildings.push(box);
         colliders.push(box);
       }
@@ -255,11 +293,33 @@ export function createWorld(scene, random) {
   // clear of the road so cars can drive past it.
   garage.position.set(130, 0, -122);
   scene.add(garage);
-  colliders.push({ minX: 121, maxX: 139, minZ: -128, maxZ: -116 });
+  const garageBox = { minX: 121, maxX: 139, minZ: -128, maxZ: -116, height: 7 };
+  colliders.push(garageBox);
+  buildings.push(garageBox);
 
   // --- sky, sun, light ------------------------------------------------------
   scene.background = new THREE.Color(0x87bfe8);
   scene.fog = new THREE.Fog(0x9ec8e8, 220, 620);
+  // A gradient sky dome (deep blue up high, warm haze at the horizon) with
+  // a glowing sun disc in the direction the light comes from.
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(950, 16, 12),
+    new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide, fog: false }),
+  );
+  scene.add(sky);
+  const glow = glowTexture();
+  const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glow, transparent: true, depthWrite: false, fog: false,
+  }));
+  sunSprite.position.set(480, 620, 240);
+  sunSprite.scale.set(320, 320, 1);
+  scene.add(sunSprite);
+  const sunDisc = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glow, transparent: true, depthWrite: false, fog: false,
+  }));
+  sunDisc.position.set(480, 620, 240);
+  sunDisc.scale.set(110, 110, 1);
+  scene.add(sunDisc);
   const sun = new THREE.DirectionalLight(0xfff2d8, 2.6);
   sun.position.set(120, 180, 60);
   sun.castShadow = true;
@@ -285,6 +345,13 @@ export function createWorld(scene, random) {
   return {
     buildings,
     colliders,
+    /** True when the point (x, y, z) is inside a building's walls below its roof. */
+    pointInBuilding(x, y, z) {
+      for (const box of buildings) {
+        if (y < box.height && x > box.minX && x < box.maxX && z > box.minZ && z < box.maxZ) return true;
+      }
+      return false;
+    },
     /** Push a circle (x, z, radius) out of every building; returns true on a hit. */
     collideCircle(x, z, radius) {
       for (const box of colliders) {

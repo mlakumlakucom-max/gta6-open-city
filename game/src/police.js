@@ -6,13 +6,13 @@
 
 import * as THREE from 'three';
 import { POLICE, WORLD } from './config.js';
-import { makeCarMesh } from './vehicles.js';
+import { makeCarMesh, setBrakes } from './vehicles.js';
 import { nearestRoad, roadCentres } from './world.js';
 
 const POLICE_PAINT = 0x1e2a3a;
 
 function makePoliceMesh() {
-  const { group, wheels } = makeCarMesh(POLICE_PAINT);
+  const { group, wheels, brakeMats } = makeCarMesh(POLICE_PAINT);
   // White doors and a light bar, so a police car reads at a glance.
   const door = new THREE.Mesh(
     new THREE.BoxGeometry(2.04, 0.4, 1.6),
@@ -32,7 +32,9 @@ function makePoliceMesh() {
   );
   bar2.position.set(0, 1.55, 0.25);
   group.add(bar2);
-  return { group, wheels, bar, bar2 };
+  // The mesh already carries brake lights (makeCarMesh builds them for
+  // every car); police cars light theirs when lining up a ram.
+  return { group, wheels, brakeMats, bar, bar2 };
 }
 
 export function createPolice(scene, world, random) {
@@ -47,10 +49,10 @@ export function createPolice(scene, world, random) {
     const onXRoad = random.next() < 0.5;
     const x = onXRoad ? playerPos.x + random.pick([-1, 1]) * POLICE.spawnDistance : road;
     const z = onXRoad ? roadZ : playerPos.z + random.pick([-1, 1]) * POLICE.spawnDistance;
-    const { group, wheels, bar, bar2 } = makePoliceMesh();
+    const { group, wheels, brakeMats, bar, bar2 } = makePoliceMesh();
     group.position.set(x, 0, z);
     scene.add(group);
-    const car = { mesh: group, wheels, bar, bar2, x, z, yaw: 0, speed: 0, ramCooldown: 0 };
+    const car = { mesh: group, wheels, brakeMats, bar, bar2, x, z, yaw: 0, speed: 0, ramCooldown: 0 };
     cars.push(car);
     return car;
   }
@@ -98,6 +100,10 @@ export function createPolice(scene, world, random) {
         while (dyaw > Math.PI) dyaw -= Math.PI * 2;
         while (dyaw < -Math.PI) dyaw += Math.PI * 2;
         car.yaw += Math.max(-2.4 * dt, Math.min(2.4 * dt, dyaw));
+        // Brake lights flare while the car swings hard to line up a ram or
+        // closes in for one — the same dim/bright pair as player and
+        // traffic cars, so a chase reads the same from every angle.
+        setBrakes(car.brakeMats, Math.abs(dyaw) > 0.6 || dist < 5);
         car.speed = Math.min(POLICE.chaseSpeed, car.speed + 12 * dt);
         car.x += Math.sin(car.yaw) * car.speed * dt;
         car.z += Math.cos(car.yaw) * car.speed * dt;

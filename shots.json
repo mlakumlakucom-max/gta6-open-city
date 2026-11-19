@@ -1,6 +1,1 @@
-[
-  { "name": "1-chase.jpg", "query": "?shot=chase&seed=7" },
-  { "name": "2-drive.jpg", "query": "?shot=drive&seed=7" },
-  { "name": "3-street.jpg", "query": "?shot=street&seed=7" },
-  { "name": "4-mission.jpg", "query": "?shot=mission&seed=7" }
-]
+[{"name":"1-chase.jpg","query":"?shot=chase&seed=7"},{"name":"2-drive.jpg","query":"?shot=drive&seed=7"},{"name":"3-street.jpg","query":"?shot=combat&seed=7"},{"name":"4-mission.jpg","query":"?shot=courier&seed=7"}]

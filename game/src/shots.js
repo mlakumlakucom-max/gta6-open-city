@@ -7,6 +7,56 @@
 
 import { MISSIONS, SHOT_SECONDS } from './config.js';
 
+const ROAD_CENTRES = [-156, -104, -52, 0, 52, 104, 156];
+
+function nearestRoadCentre(v) {
+  let best = ROAD_CENTRES[0];
+  for (const c of ROAD_CENTRES) {
+    if (Math.abs(c - v) < Math.abs(best - v)) best = c;
+  }
+  return best;
+}
+
+/**
+ * Road-following autopilot: drive to the active mission target along the
+ * road grid (nearest intersection first, then the final approach), so a
+ * long cross-city leg does not cut diagonally through buildings.
+ */
+function makeRoadAutopilot(game) {
+  return () => {
+    const car = game.driving;
+    if (!car) return { forward: 0, strafe: 0, run: false };
+    const t = game.missions.target;
+    if (!t) return { forward: 0, strafe: 0, run: false };
+    const d = Math.hypot(t.x - car.x, t.z - car.z);
+    if (d < 7) return { forward: car.speed > 2 ? -1 : 0, strafe: 0, run: false };
+    const wx = nearestRoadCentre(t.x);
+    const wz = nearestRoadCentre(t.z);
+    const goal = Math.hypot(wx - car.x, wz - car.z) > 10 ? { x: wx, z: wz } : t;
+    let gx, gz;
+    const onXRoad = Math.abs(car.z - nearestRoadCentre(car.z)) <= 6;
+    const onZRoad = Math.abs(car.x - nearestRoadCentre(car.x)) <= 6;
+    if (onXRoad && Math.abs(car.x - goal.x) > 6) {
+      gx = goal.x; gz = nearestRoadCentre(car.z);
+    } else if (onZRoad && Math.abs(car.z - goal.z) > 6) {
+      gx = nearestRoadCentre(car.x); gz = goal.z;
+    } else if (onXRoad || onZRoad) {
+      gx = goal.x; gz = goal.z;
+    } else if (Math.abs(car.z - nearestRoadCentre(car.z)) <= Math.abs(car.x - nearestRoadCentre(car.x))) {
+      gx = car.x; gz = nearestRoadCentre(car.z);
+    } else {
+      gx = nearestRoadCentre(car.x); gz = car.z;
+    }
+    const desired = Math.atan2(gx - car.x, gz - car.z);
+    let dd = desired - car.yaw;
+    while (dd > Math.PI) dd -= Math.PI * 2;
+    while (dd < -Math.PI) dd += Math.PI * 2;
+    // Coast through a sharp turn instead of swinging wide into a building.
+    const fwd = Math.abs(dd) > 0.7 ? 0 : 1;
+    return { forward: fwd, strafe: Math.max(-1, Math.min(1, dd * 1.8)), run: false };
+  };
+}
+
 /** Drive toward a point (or straight ahead when none is given). */
 function makeDriveAutopilot(game, target) {
   return () => {
@@ -74,6 +124,50 @@ const SCENES = {
     });
     game.autopilot = makeWalkAutopilot();
     return SHOT_SECONDS.street;
+  },
+  combat(game) {
+    startPlaying();
+    // On foot at a busy intersection, two stars up: foot cops close in
+    // from down the street while the player fires at them — tracer, ammo
+    // readout and wanted stars all in the frame.
+    game.teleportPlayer(-6, -52, Math.PI / 2);
+    game.setCamera(-Math.PI / 2, 0.32);
+    game.raiseWanted(2);
+    game.combat.placeCop(14, -52);
+    game.combat.placeCop(20, -46);
+    const walkers = game.pedestrians.walkers.slice(0, 4);
+    walkers.forEach((w, i) => {
+      w.x = -20 + i * 10;
+      w.z = -52 + (i % 2 === 0 ? 8.5 : -8.5);
+      w.axis = 'x';
+      w.road = -52;
+      w.dir = i % 2 === 0 ? 1 : -1;
+    });
+    game.autoFire = true;
+    game.autopilot = makeWalkAutopilot();
+    return SHOT_SECONDS.combat;
+  },
+  courier(game) {
+    startPlaying();
+    // Courier Run mid-route: the package is picked up, the clock is
+    // running, and the player drives toward the first drop's beacon.
+    game.missions.stage(1, 1, game);
+    const car = game.vehicles.parked[0];
+    // Face north up Palm Row already: the first leg is a straight run to
+    // the intersection, so no 90° turn is needed at the start (a low-speed
+    // turn spins the car in place and drifts it into the block).
+    car.x = -52;
+    car.z = 44;
+    car.yaw = Math.PI;
+    car.mesh.position.set(-52, 0, 44);
+    car.mesh.rotation.y = Math.PI;
+    game.teleportPlayer(-55, 44, Math.PI);
+    game.enterCar(car);
+    game.cameraLock = { yaw: Math.PI * 0.75, pitch: 0.35 };
+    // Road-following: the straight-line route from here to the first drop
+    // cuts diagonally through a block and wedges the car on a building.
+    game.autopilot = makeRoadAutopilot(game);
+    return SHOT_SECONDS.courier;
   },
   drive(game) {
     startPlaying();

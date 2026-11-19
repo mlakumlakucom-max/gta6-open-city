@@ -37,7 +37,24 @@ export function makeCarMesh(colour) {
     car.add(wheel);
     wheels.push(wheel);
   }
-  return { group: car, wheels };
+  // Brake lights on the rear: dim red at rest, bright red while braking.
+  const brakeMats = [];
+  for (const x of [-0.7, 0.7]) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0x881111 });
+    const light = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.18, 0.08), mat);
+    light.position.set(x, 0.62, -2.22);
+    car.add(light);
+    brakeMats.push(mat);
+  }
+  return { group: car, wheels, brakeMats };
+}
+
+/**
+ * Set a car's brake lights bright (braking) or dim (coasting). Exported so
+ * police cars — built from the same mesh — can light theirs too.
+ */
+export function setBrakes(brakeMats, on) {
+  for (const mat of brakeMats) mat.color.setHex(on ? 0xff2222 : 0x881111);
 }
 
 function laneOffset(axis, dir) {
@@ -51,6 +68,66 @@ export function createVehicles(scene, world, random) {
   const parked = [];
   const centres = roadCentres();
 
+  // Skid marks and dust puffs: small pools of fading planes, reused so a
+  // long drift never allocates. Marks lie flat on the road; dust rises.
+  const skidPool = [];
+  for (let i = 0; i < 80; i += 1) {
+    const mark = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.5, 1.6),
+      new THREE.MeshBasicMaterial({ color: 0x14161a, transparent: true, opacity: 0 }),
+    );
+    mark.rotation.x = -Math.PI / 2;
+    mark.position.y = 0.07;
+    mark.visible = false;
+    scene.add(mark);
+    skidPool.push({ mesh: mark, life: 0 });
+  }
+  let skidNext = 0;
+  const dustPool = [];
+  for (let i = 0; i < 24; i += 1) {
+    const puff = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.4, 1.4),
+      new THREE.MeshBasicMaterial({ color: 0xd8cdb2, transparent: true, opacity: 0, side: THREE.DoubleSide }),
+    );
+    puff.visible = false;
+    scene.add(puff);
+    dustPool.push({ mesh: puff, life: 0 });
+  }
+  let dustNext = 0;
+
+  function placeSkid(x, z, yaw) {
+    const slot = skidPool[skidNext];
+    skidNext = (skidNext + 1) % skidPool.length;
+    slot.mesh.position.set(x, 0.07, z);
+    slot.mesh.rotation.z = -yaw;
+    slot.mesh.visible = true;
+    slot.mesh.material.opacity = 0.55;
+    slot.life = 4;
+  }
+  function puffDust(x, z) {
+    const slot = dustPool[dustNext];
+    dustNext = (dustNext + 1) % dustPool.length;
+    slot.mesh.position.set(x, 0.5, z);
+    slot.mesh.visible = true;
+    slot.mesh.material.opacity = 0.4;
+    slot.life = 0.9;
+  }
+  function stepEffects(dt) {
+    for (const slot of skidPool) {
+      if (slot.life <= 0) continue;
+      slot.life -= dt;
+      slot.mesh.material.opacity = Math.max(0, slot.life / 4) * 0.55;
+      if (slot.life <= 0) slot.mesh.visible = false;
+    }
+    for (const slot of dustPool) {
+      if (slot.life <= 0) continue;
+      slot.life -= dt;
+      slot.mesh.position.y += dt * 1.2;
+      slot.mesh.material.opacity = Math.max(0, slot.life / 0.9) * 0.4;
+      if (slot.life <= 0) slot.mesh.visible = false;
+    }
+  }
+
   function spawnTrafficCar() {
     const axis = random.pick(['x', 'z']);
     const road = random.pick(centres);
@@ -59,12 +136,12 @@ export function createVehicles(scene, world, random) {
     const off = laneOffset(axis, dir);
     const x = axis === 'x' ? along : road + off;
     const z = axis === 'x' ? road + off : along;
-    const { group, wheels } = makeCarMesh(random.pick(PAINT));
+    const { group, wheels, brakeMats } = makeCarMesh(random.pick(PAINT));
     group.position.set(x, 0, z);
     group.rotation.y = axis === 'x' ? (dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (dir > 0 ? 0 : Math.PI);
     scene.add(group);
     const car = {
-      mesh: group, wheels, axis, dir, road, speed: random.range(TRAFFIC.minSpeed, TRAFFIC.maxSpeed),
+      mesh: group, wheels, brakeMats, axis, dir, road, speed: random.range(TRAFFIC.minSpeed, TRAFFIC.maxSpeed),
       cruise: random.range(TRAFFIC.minSpeed, TRAFFIC.maxSpeed), x, z, yaw: group.rotation.y,
     };
     traffic.push(car);
@@ -72,11 +149,11 @@ export function createVehicles(scene, world, random) {
   }
 
   function spawnParkedCar(x, z, yaw) {
-    const { group, wheels } = makeCarMesh(random.pick(PAINT));
+    const { group, wheels, brakeMats } = makeCarMesh(random.pick(PAINT));
     group.position.set(x, 0, z);
     group.rotation.y = yaw;
     scene.add(group);
-    const car = { mesh: group, wheels, x, z, yaw, speed: 0, parked: true, owned: false };
+    const car = { mesh: group, wheels, brakeMats, x, z, yaw, speed: 0, parked: true, owned: false };
     parked.push(car);
     return car;
   }
@@ -109,11 +186,14 @@ export function createVehicles(scene, world, random) {
   }
 
   function stepTraffic(dt) {
+    stepEffects(dt);
     for (const car of traffic) {
       // Slow for the car ahead, stop bumper to bumper.
       const gap = carAhead(car);
       const target = gap < TRAFFIC.followGap ? 0 : car.cruise;
+      const wasFaster = car.speed > target + 0.5;
       car.speed += Math.max(-14 * dt, Math.min(8 * dt, target - car.speed));
+      setBrakes(car.brakeMats, wasFaster && car.speed > 0.5);
       const move = car.speed * car.dir * dt;
       if (car.axis === 'x') car.x += move;
       else car.z += move;
@@ -184,8 +264,33 @@ export function createVehicles(scene, world, random) {
         car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 8 * dt);
       }
       car.speed = Math.max(-CAR.reverseSpeed, Math.min(CAR.topSpeed, car.speed));
+      // Braking lights up the rear; a hard turn at speed leaves skid marks
+      // and kicks up dust at the rear wheels.
+      const braking = fwd < 0 && car.speed > 0.5;
+      setBrakes(car.brakeMats, braking);
+      const drifting = Math.abs(steer) > 0.35 && Math.abs(car.speed) > 15;
+      if (drifting) {
+        const back = -1.45;
+        const rx = Math.cos(car.yaw);
+        const rz = -Math.sin(car.yaw);
+        for (const side of [-0.95, 0.95]) {
+          placeSkid(
+            car.x + Math.sin(car.yaw) * back + rx * side,
+            car.z + Math.cos(car.yaw) * back + rz * side,
+            car.yaw,
+          );
+          puffDust(
+            car.x + Math.sin(car.yaw) * back + rx * side,
+            car.z + Math.cos(car.yaw) * back + rz * side,
+          );
+        }
+      }
       const steerAngle = steer * CAR.steerMax * (1 - Math.min(0.6, Math.abs(car.speed) / CAR.topSpeed));
-      car.yaw += steerAngle * (car.speed / CAR.topSpeed) * CAR.steerSpeed * dt * (car.speed >= 0 ? 1 : -1);
+      // Steering stays useful at low speed: without this floor the turn
+      // radius is wider than a city block and a U-turn wedges the car in a
+      // building. Top speed keeps the same wide, fast feel.
+      const speedFactor = 0.25 + 0.75 * Math.min(1, Math.abs(car.speed) / CAR.topSpeed);
+      car.yaw += steerAngle * speedFactor * CAR.steerSpeed * dt * (car.speed >= 0 ? 1 : -1);
       const nx = car.x + Math.sin(car.yaw) * car.speed * dt;
       const nz = car.z + Math.cos(car.yaw) * car.speed * dt;
       const hit = world.collideCircle(nx, nz, CAR.radius);

@@ -26,6 +26,17 @@
   #prompt { font-size: 15px; margin-top: 6px; color: #ffd23a; }
   #speed { position: fixed; right: 22px; bottom: 86px; z-index: 5; color: #fff;
     font-size: 30px; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,.8); pointer-events: none; }
+  #timer { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 5;
+    font-size: 34px; font-weight: 800; color: #ffd23a; text-shadow: 0 2px 4px rgba(0,0,0,.8);
+    pointer-events: none; }
+  #ammo { position: fixed; right: 22px; bottom: 52px; z-index: 5; color: #ffe27a;
+    font-size: 16px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,.8); pointer-events: none; }
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 18px; height: 18px; z-index: 5;
+    transform: translate(-50%, -50%); pointer-events: none; display: none; }
+  #crosshair::before, #crosshair::after { content: ''; position: absolute; background: #fff;
+    box-shadow: 0 0 3px rgba(0,0,0,.9); }
+  #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+  #crosshair::after { left: 0; top: 8px; width: 18px; height: 2px; }
   .overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center;
     justify-content: center; flex-direction: column; text-align: center; color: #eef1f5;
     background: linear-gradient(160deg, rgba(20,30,60,.88), rgba(120,40,90,.72)); }
@@ -37,7 +48,7 @@
   .overlay button { font-size: 20px; font-weight: 700; padding: 12px 44px; border: none;
     border-radius: 8px; background: #ffd23a; color: #20180a; cursor: pointer; }
   .overlay button:hover { background: #ffe27a; }
-  #pause-screen, #busted-screen { display: none; }
+  #pause-screen, #busted-screen, #wasted-screen { display: none; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.min.js" } }
@@ -55,7 +66,10 @@
 <div class="hud" id="hud-top-right">
   <canvas id="minimap" width="180" height="180"></canvas>
 </div>
+<div id="timer"></div>
+<div id="crosshair"></div>
 <div id="speed"></div>
+<div id="ammo"></div>
 <div class="hud" id="hud-bottom">
   <div id="objective">Welcome to Neon Bay</div>
   <div id="prompt"></div>
@@ -68,7 +82,8 @@
     <b>W A S D</b> — move &nbsp;·&nbsp; <b>Mouse drag</b> — look around &nbsp;·&nbsp; <b>Shift</b> — run<br>
     <b>E</b> — steal / enter a car, <b>E</b> again to get out<br>
     <b>W / S</b> — drive &amp; brake &nbsp;·&nbsp; <b>A / D</b> — steer &nbsp;·&nbsp; <b>Esc</b> — pause<br>
-    Steal a car and deliver it to the green beacon at the garage.
+    <b>F</b> — punch &nbsp;·&nbsp; <b>Click</b> — fire pistol &nbsp;·&nbsp; <b>R</b> — reload &nbsp;·&nbsp; <b>M</b> — mute<br>
+    Three missions: steal a car for Rae, run the courier clock, then outrun the heat to the beach safehouse.
   </div>
   <button id="start-button">Start</button>
 </div>
@@ -83,6 +98,12 @@
   <h1>BUSTED</h1>
   <h2>The Neon Bay police caught you. Your cash is gone — the city is not.</h2>
   <button id="restart-button">Try again</button>
+</div>
+
+<div class="overlay" id="wasted-screen">
+  <h1>WASTED</h1>
+  <h2>You went down on the streets of Neon Bay. The city keeps moving.</h2>
+  <button id="restart-button-wasted">Try again</button>
 </div>
 
 <script type="module" src="./src/main.js"></script>

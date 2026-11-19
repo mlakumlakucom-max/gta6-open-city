@@ -24,8 +24,10 @@ export function createHud(document) {
     ];
   }
 
+  const timerEl = document.getElementById('timer');
+  const ammoEl = document.getElementById('ammo');
   let lastMap = 0;
-  function drawMinimap(now, world, player, vehicles, police, missionTarget) {
+  function drawMinimap(now, world, player, vehicles, police, missionTargets, footCops) {
     if (now - lastMap < 0.1) return;
     lastMap = now;
     const g = mapCtx;
@@ -54,15 +56,20 @@ export function createHud(document) {
       const [x2, z2] = toMap(b.maxX, b.maxZ);
       g.fillRect(x1, z1, Math.max(1, x2 - x1), Math.max(1, z2 - z1));
     }
-    // Mission marker: a pulsing green ring.
-    if (missionTarget) {
-      const [mx, mz] = toMap(missionTarget.x, missionTarget.z);
+    // Mission markers: a pulsing green ring around a green diamond, one
+    // per target the active step still has (courier drops, safehouse).
+    for (const target of missionTargets || []) {
+      const [mx, mz] = toMap(target.x, target.z);
       const r = 5 + 2 * Math.sin(now * 4);
       g.strokeStyle = '#40ff80';
       g.lineWidth = 2;
       g.beginPath(); g.arc(mx, mz, r, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#40ff80';
+      g.beginPath();
+      g.moveTo(mx, mz - 4); g.lineTo(mx + 4, mz); g.lineTo(mx, mz + 4); g.lineTo(mx - 4, mz);
+      g.closePath(); g.fill();
     }
-    // Parked cars in yellow, traffic in pale yellow, police flashing red/blue.
+    // Parked cars in yellow, traffic in pale yellow.
     g.fillStyle = '#e8c33a';
     for (const car of vehicles.parked) {
       const [x, z] = toMap(car.x, car.z);
@@ -73,11 +80,21 @@ export function createHud(document) {
       const [x, z] = toMap(car.x, car.z);
       g.fillRect(x - 1.5, z - 1.5, 3, 3);
     }
+    // Police cars: flashing red/blue circles with a white ring, so they
+    // never read as traffic. Foot cops: small dark-blue squares.
     const flash = Math.sin(now * 8) > 0;
-    g.fillStyle = flash ? '#ff2020' : '#2040ff';
     for (const car of police.cars) {
       const [x, z] = toMap(car.x, car.z);
-      g.beginPath(); g.arc(x, z, 3, 0, Math.PI * 2); g.fill();
+      g.fillStyle = flash ? '#ff2020' : '#2040ff';
+      g.beginPath(); g.arc(x, z, 3.5, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#ffffff';
+      g.lineWidth = 1;
+      g.beginPath(); g.arc(x, z, 5, 0, Math.PI * 2); g.stroke();
+    }
+    g.fillStyle = '#2040ff';
+    for (const cop of footCops || []) {
+      const [x, z] = toMap(cop.x, cop.z);
+      g.fillRect(x - 2, z - 2, 4, 4);
     }
     // The player: a white arrow pointing where they face.
     const [px, pz] = toMap(player.x, player.z);
@@ -113,6 +130,26 @@ export function createHud(document) {
     },
     setSpeed(kmh, driving) {
       speedEl.textContent = driving ? `${Math.round(kmh)} km/h` : '';
+    },
+    /** The mission clock (Courier Run), or null to hide it. */
+    setTimer(seconds) {
+      if (!timerEl) return;
+      if (seconds === null || seconds === undefined) {
+        timerEl.textContent = '';
+        return;
+      }
+      const s = Math.max(0, Math.ceil(seconds));
+      timerEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+      timerEl.style.color = s <= 30 ? '#ff5a5a' : '#ffd23a';
+    },
+    /** Pistol ammo on foot (hidden while driving). */
+    setAmmo(ammo, mag, reloading, driving) {
+      if (!ammoEl) return;
+      if (driving) {
+        ammoEl.textContent = '';
+        return;
+      }
+      ammoEl.textContent = reloading ? 'RELOADING…' : `AMMO ${ammo} / ${mag}`;
     },
     setPrompt(text) {
       if (promptEl.textContent !== text) promptEl.textContent = text;

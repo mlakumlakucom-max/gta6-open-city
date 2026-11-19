@@ -10,11 +10,15 @@ import * as THREE from 'three';
 import { CAR, MISSIONS, PLAYER, POLICE, SAVE_KEY, STEP } from './config.js';
 import { createRandom } from './random.js';
 import { createWorld } from './world.js';
-import { ACTION_CONFIRM, ACTION_ENTER, ACTION_PAUSE, createInput } from './input.js';
+import {
+  ACTION_CONFIRM, ACTION_ENTER, ACTION_MUTE, ACTION_PAUSE, ACTION_PUNCH,
+  ACTION_RELOAD, ACTION_SHOOT, createInput,
+} from './input.js';
 import { createAudio } from './audio.js';
 import { createVehicles } from './vehicles.js';
 import { createPedestrians } from './pedestrians.js';
 import { createPolice } from './police.js';
+import { createCombat } from './combat.js';
 import { createMissions } from './missions.js';
 import { createHud } from './hud.js';
 import { stageShot } from './shots.js';
@@ -44,6 +48,7 @@ const world = createWorld(scene, random);
 const vehicles = createVehicles(scene, world, random);
 const pedestrians = createPedestrians(scene, world, random);
 const police = createPolice(scene, world, random);
+const combat = createCombat(scene, world);
 const missions = createMissions(scene);
 const hud = createHud(document);
 const audio = createAudio();
@@ -95,6 +100,7 @@ let cameraYaw = Math.PI * 0.75;
 let cameraPitch = 0.42;
 let lastDamageAt = -10;
 let lastPedestrianHitAt = -10;
+let lastAutoFireAt = -10;
 let elapsed = 0;
 let saveTimer = 0;
 
@@ -111,7 +117,7 @@ function writeSave() {
   try {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({
       cash: player.cash,
-      missionDone: missions.done,
+      missionDone: missions.doneIds,
     }));
   } catch {
     // Storage can be off (private windows): progress then lasts this visit only.
@@ -153,13 +159,24 @@ function exitCar() {
   playerMesh.visible = true;
 }
 
-function damage(amount) {
+/**
+ * Hurt the player. cause 'foot' (beaten down on foot) shows WASTED, any
+ * other cause shows BUSTED — the police caught the player in a car.
+ */
+function damage(amount, cause) {
+  if (screen !== 'play') return;
   player.health = Math.max(0, player.health - amount);
   lastDamageAt = elapsed;
   if (player.health <= 0) {
-    screen = 'busted';
-    document.getElementById('busted-screen').style.display = 'flex';
-    announce('Busted. The Neon Bay police caught you.');
+    if (cause === 'foot') {
+      screen = 'wasted';
+      document.getElementById('wasted-screen').style.display = 'flex';
+      announce('Wasted. You went down on the streets of Neon Bay.');
+    } else {
+      screen = 'busted';
+      document.getElementById('busted-screen').style.display = 'flex';
+      announce('Busted. The Neon Bay police caught you.');
+    }
   }
 }
 
@@ -186,10 +203,28 @@ const game = {
   get world() {
     return world;
   },
+  get combat() {
+    return combat;
+  },
+  get cameraYaw() {
+    return cameraYaw;
+  },
+  get cameraPitch() {
+    return cameraPitch;
+  },
+  get cameraPos() {
+    return { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+  },
   get elapsed() {
     return elapsed;
   },
+  hurt(amount, cause) {
+    damage(amount, cause);
+  },
   autopilot: null,
+  // Screenshot scenes set this to make the player fire the pistol on a
+  // timer, so the combat shot shows a tracer in the frame.
+  autoFire: false,
   // A fixed orbit angle for screenshot scenes: the loop keeps the camera
   // there instead of chasing behind the car (used to look back at a chase
   // or at the garage in the mission scene).
@@ -255,6 +290,15 @@ function step(dt) {
     document.getElementById('pause-screen').style.display = 'flex';
     return;
   }
+  if (actions & ACTION_MUTE) {
+    audio.setMuted(!audio.muted);
+    announce(audio.muted ? 'Sound muted.' : 'Sound on.');
+  }
+  // A failed timed mission retries on Enter.
+  if (missions.failed && (actions & ACTION_CONFIRM)) {
+    missions.retry();
+    announce('Courier Run restarted — pick up the package at the depot.');
+  }
 
   let move = input.move();
   if (game.autopilot) {
@@ -296,6 +340,23 @@ function step(dt) {
       const car = vehicles.nearestParked(player.x, player.z, PLAYER.enterCarRange);
       if (car) enterCar(car);
     }
+    // Combat on foot: F punches, click fires, R reloads.
+    if (!driving) {
+      if (actions & ACTION_PUNCH) {
+        const hit = combat.punch(game, elapsed);
+        if (hit) audio.punch();
+      }
+      if (actions & ACTION_SHOOT) {
+        combat.shoot(game, cameraYaw, cameraPitch, elapsed, audio);
+      }
+      if (actions & ACTION_RELOAD) {
+        if (combat.startReload(elapsed)) announce('Reloading…');
+      }
+      if (game.autoFire && elapsed - lastAutoFireAt > 0.6) {
+        lastAutoFireAt = elapsed;
+        combat.shoot(game, cameraYaw, cameraPitch, elapsed, audio);
+      }
+    }
   }
 
   vehicles.stepTraffic(dt);
@@ -307,6 +368,7 @@ function step(dt) {
     damage(POLICE.ramDamage);
     audio.crash(1);
   });
+  combat.step(dt, game, elapsed);
   audio.siren(police.wanted, elapsed);
 
   // Health comes back slowly once the heat is off.
@@ -319,7 +381,11 @@ function step(dt) {
     player.cash += reward;
     audio.pickup();
     writeSave();
-    announce(`Mission complete! +$${reward}`);
+    if (missions.storyDone) {
+      announce(`Story Complete! +$${reward} — all three missions done. Neon Bay is yours.`);
+    } else {
+      announce(`Mission complete! +$${reward}`);
+    }
   }
   missions.updateBeacon();
 
@@ -327,7 +393,10 @@ function step(dt) {
   hud.setCash(player.cash);
   hud.setHealth(player.health);
   hud.setWanted(police.wanted);
-  hud.setObjective(missions.stepText());
+  hud.setObjective(missions.stepText(game));
+  hud.setTimer(missions.timeLeft(game));
+  hud.setAmmo(combat.ammo, combat.magSize, combat.reloading, !!driving);
+  document.getElementById('crosshair').style.display = driving ? 'none' : 'block';
   hud.setSpeed(driving ? Math.abs(driving.speed) * 3.6 : 0, !!driving);
   if (!driving) {
     const near = vehicles.nearestParked(player.x, player.z, PLAYER.enterCarRange);
@@ -335,7 +404,7 @@ function step(dt) {
   } else {
     hud.setPrompt('Press E to leave the car');
   }
-  hud.drawMinimap(elapsed, world, player, vehicles, police, missions.target);
+  hud.drawMinimap(elapsed, world, player, vehicles, police, missions.targets(), combat.cops);
 
   saveTimer += dt;
   if (saveTimer > 10) {
@@ -360,13 +429,31 @@ function step(dt) {
   const cx = target.x + Math.sin(cameraYaw) * Math.cos(cameraPitch) * dist;
   const cz = target.z + Math.cos(cameraYaw) * Math.cos(cameraPitch) * dist;
   const cy = 1.6 + Math.sin(cameraPitch) * dist;
-  camera.position.set(cx, cy, cz);
+  // Camera collision: pull the camera in along its ray until it is out of
+  // every building, so the view never clips through a tower.
+  let pull = 1;
+  for (let t = 1; t >= 0.15; t -= 0.05) {
+    const px = target.x + (cx - target.x) * t;
+    const py = 1.6 + (cy - 1.6) * t;
+    const pz = target.z + (cz - target.z) * t;
+    if (py > 0.6 && !world.pointInBuilding(px, py, pz)) {
+      pull = t;
+      break;
+    }
+    pull = t;
+  }
+  camera.position.set(
+    target.x + (cx - target.x) * pull,
+    Math.max(0.6, 1.6 + (cy - 1.6) * pull),
+    target.z + (cz - target.z) * pull,
+  );
   camera.lookAt(target.x, 1.6, target.z);
 }
 
 function startGame() {
   document.getElementById('start-screen').style.display = 'none';
   document.getElementById('busted-screen').style.display = 'none';
+  document.getElementById('wasted-screen').style.display = 'none';
   document.getElementById('pause-screen').style.display = 'none';
   audio.start();
   screen = 'play';
@@ -377,6 +464,7 @@ function restartGame() {
   player.health = PLAYER.health;
   player.cash = 0;
   police.clear();
+  missions.reset();
   if (driving) {
     driving = null;
     playerMesh.visible = true;
@@ -394,6 +482,7 @@ document.getElementById('resume-button').addEventListener('click', () => {
   screen = 'play';
 });
 document.getElementById('restart-button').addEventListener('click', restartGame);
+document.getElementById('restart-button-wasted').addEventListener('click', restartGame);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
